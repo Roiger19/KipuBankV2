@@ -1,57 +1,72 @@
-# Sample Hardhat 3 Beta Project (`mocha` and `ethers`)
+# 🛡️ KipuBankV2 - Production-Ready Multi-Asset Vault
 
-This project showcases a Hardhat 3 Beta project using `mocha` for tests and the `ethers` library for Ethereum interactions.
+## 1. High-Level Explanation & Improvements
 
-To learn more about the Hardhat 3 Beta, please visit the [Getting Started guide](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3). To share your feedback, join our [Hardhat 3 Beta](https://hardhat.org/hardhat3-beta-telegram-group) Telegram group or [open an issue](https://github.com/NomicFoundation/hardhat/issues/new) in our GitHub issue tracker.
+KipuBankV2 is a significant upgrade to the original KipuBank contract, transitioning it from a simple ETH-only vault to a production-ready, multi-asset (ETH & ERC20) banking contract.
 
-## Project Overview
+The core motivation was to enhance **security, flexibility, and real-world applicability**.
 
-This example project includes:
+### Key Improvements Implemented:
 
-- A simple Hardhat configuration file.
-- Foundry-compatible Solidity unit tests.
-- TypeScript integration tests using `mocha` and ethers.js
-- Examples demonstrating how to connect to different types of networks, including locally simulating OP mainnet.
+* **Access Control (`Ownable`):** The contract is now managed by an `owner`. This is crucial for security, as only the owner can whitelist new tokens for deposit or update critical parameters (like the bank cap), preventing users from depositing malicious or unknown assets.
+* **Multi-Token Support (ETH & ERC20):** The vault now supports both native ETH and any whitelisted ERC20 token.
+* **Internal Accounting (using `address(0)`):** A nested mapping (`token => user => balance`) now tracks all funds. We use the `address(0)` convention to represent ETH within this mapping, allowing us to reuse the same internal logic for all assets.
+* **Chainlink Oracles (USD-Based Limits):** The `BANK_CAP` and `MAX_WITHDRAW_AMOUNT` are now defined in **USD**, not in a specific token amount. When a user deposits any asset, the contract fetches its real-time price from a Chainlink oracle, converts the amount to its USD value, and checks it against the cap. This creates a unified and far more stable security policy across all assets.
+* **Enhanced Security (`ReentrancyGuard` & `SafeERC20`):** The contract inherits from OpenZeppelin's `ReentrancyGuard` to protect all deposit/withdraw functions. It also uses `SafeERC20` for all token transfers, preventing issues with non-standard ERC20s.
+* **Advanced Error Handling:** The contract implements a full suite of custom errors (e.g., `TokenNotWhitelisted`, `StalePriceFeed`) to provide clear reasons for transaction failures.
 
-## Usage
+---
 
-### Running Tests
+## 2. Deployment & Interaction Instructions
 
-To run all the tests in the project, execute the following command:
+This project is built with Hardhat.
 
-```shell
-npx hardhat test
-```
+### Deployment
 
-You can also selectively run the Solidity or `mocha` tests:
+1.  **Set up your Environment**: You need a `.env` file (add this to `.gitignore`) with your `SEPOLIA_RPC_URL` (from Alchemy/Infura) and your `PRIVATE_KEY`.
+2.  **Configure Hardhat**: Update the `hardhat.config.ts` to include the Sepolia network.
+3.  **Run the Deploy Script**: This project uses Hardhat Ignition. You can deploy to a testnet (e.g., Sepolia) by running:
+    ```bash
+    npx hardhat ignition deploy ignition/modules/KipuBankV2.ts --network sepolia
+    ```
+4.  **Copy the Address**: The script will output the contract address upon successful deployment.
 
-```shell
-npx hardhat test solidity
-npx hardhat test mocha
-```
+### Interaction Flow
 
-### Make a deployment to Sepolia
+#### As the Admin (Owner)
 
-This project includes an example Ignition module to deploy the contract. You can deploy this module to a locally simulated chain or to Sepolia.
+Your first step after deployment *must* be to whitelist assets.
 
-To run the deployment to a local chain:
+1.  **Whitelist ETH**:
+    * Call `whitelistToken(address _token, address _priceFeed)`
+    * `_token`: `0x0000000000000000000000000000000000000000` (the `ETH_ADDRESS`)
+    * `_priceFeed`: `0x694AA1769357215DE4FAC081bf1f309aDC325306` (Sepolia ETH/USD feed)
+2.  **Whitelist an ERC20 (e.g., LINK)**:
+    * Call `whitelistToken(address _token, address _priceFeed)`
+    * `_token`: `0x779877A7B0D9E8603169DdbD7836e478b4624789` (Sepolia LINK address)
+    * `_priceFeed`: `0xc59E3633BAAC79493d908e63626716e204A45EdF` (Sepolia LINK/USD feed)
 
-```shell
-npx hardhat ignition deploy ignition/modules/Counter.ts
-```
+#### As a User
 
-To run the deployment to Sepolia, you need an account with funds to send the transaction. The provided Hardhat configuration includes a Configuration Variable called `SEPOLIA_PRIVATE_KEY`, which you can use to set the private key of the account you want to use.
+1.  **Deposit ETH**:
+    * Call the `depositEth()` function while sending ETH (setting the `value` in the transaction).
+2.  **Deposit ERC20**:
+    * **Step A (Approve):** Call the `approve()` function on the ERC20 token contract, giving the KipuBankV2 contract address permission to spend your tokens.
+    * **Step B (Deposit):** Call `depositErc20(address _token, uint256 _amount)` with the token's address and the amount you wish to deposit.
+3.  **Withdraw Funds**:
+    * Call `withdrawEth(uint256 _amount)` or `withdrawErc20(address _token, uint256 _amount)`.
+4.  **Check Balances**:
+    * Call `getClientBalance(address _token, address _user)` to see the balance for a specific asset.
+    * Call `getTotalUsdBalance()` to see the bank's total assets in USD.
 
-You can set the `SEPOLIA_PRIVATE_KEY` variable using the `hardhat-keystore` plugin or by setting it as an environment variable.
+---
 
-To set the `SEPOLIA_PRIVATE_KEY` config variable using `hardhat-keystore`:
+## 3. Design Decisions & Trade-offs
 
-```shell
-npx hardhat keystore set SEPOLIA_PRIVATE_KEY
-```
+* **Decision: USD-Based Limits vs. Token-Based Limits**
+    * **Reasoning**: A USD-based cap is more robust. A cap of "100 ETH" becomes extremely high (in value) if ETH moons, increasing the contract's risk profile. A cap of "$10,000 USD" remains consistent regardless of market volatility.
+    * **Trade-off**: This creates a **hard dependency on the Chainlink oracle**. If the oracle is stale (older than `MAX_PRICE_STALE_PERIOD`) or fails, all deposits and withdrawals for that asset are blocked until the oracle recovers. This is a trade-off of liveness for security.
 
-After setting the variable, you can run the deployment with the Sepolia network:
-
-```shell
-npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
-```
+* **Decision: Admin Whitelist vs. Open Deposits**
+    * **Reasoning**: Allowing anyone to deposit any ERC20 token is a massive security risk (e.g., "phishing" tokens, valueless tokens). An `onlyOwner` whitelist ensures that only legitimate assets with valid price feeds are accepted.
+    * **Trade-off**: This introduces **centralization**. The `owner` is a single point of failure. A future, more decentralized version of this contract would replace the `owner` with a multi-signature wallet or a governance (DAO) contract.
